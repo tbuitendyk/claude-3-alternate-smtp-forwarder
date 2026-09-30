@@ -1,16 +1,16 @@
 # --- BEGIN claude-3-alternate-smtp-forwarder ---
 # Selectively relay mail through Brevo for Microsoft-hosted recipients.
 # All other recipients still go direct from this host.
-
-transport_maps =
-    hash:/etc/postfix/transport_brevo
+#
+# install.sh also appends hash:/etc/postfix/transport_brevo to the existing
+# transport_maps line (e.g. iRedMail's SQL maps) in place. If an iRedMail
+# upgrade rewrites that line, re-run install.sh.
 
 smtp_sasl_auth_enable = yes
 smtp_sasl_password_maps = hash:/etc/postfix/sasl_passwd
 smtp_sasl_security_options = noanonymous
 smtp_sasl_mechanism_filter = plain, login
 
-smtp_tls_security_level = may
 smtp_tls_policy_maps = hash:/etc/postfix/tls_policy
 
 # --- END claude-3-alternate-smtp-forwarder ---

@@ -3,7 +3,7 @@
 This is the manual, one-time work you do on Brevo's web UI before running the
 installer. It produces three things:
 
-1. SPF/DKIM DNS records to add for each of your two sending domains.
+1. DKIM/DMARC DNS records to add for each of your sending domains.
 2. A verified-sender state on Brevo for each domain.
 3. An SMTP key (the password Postfix will use).
 
@@ -14,21 +14,23 @@ installer. It produces three things:
 
 ## 2. Verify each sending domain
 
-For each of the two domains the iRedMail server sends as:
+For every domain the iRedMail server sends as:
 
-1. In the Brevo UI go to **Senders & IP -> Domains**.
+1. In the Brevo UI go to **Senders, Domains and dedicated IPs -> Domains**.
 2. Click **Add a domain**, enter the domain (e.g. `example.com`), confirm.
-3. Brevo presents three DNS records:
-   - A DKIM TXT or CNAME record (something like `mail._domainkey`).
-   - A Brevo verification TXT record (`brevo-code:...`).
-   - An optional DMARC record (skip if you already have one).
-4. Add those records to your DNS (see [`dns-records.md`](dns-records.md) for
-   the SPF caveats — Brevo's own instructions don't always emphasise the
-   include-merge step).
-5. Wait a few minutes for propagation, then click **Authenticate this domain**.
-   You should get a green check on DKIM and the verification record.
-
-Repeat for the second domain.
+3. Brevo lists two groups of records:
+   - **Authentication:** a `brevo-code:...` TXT, two DKIM CNAMEs
+     (`brevo1._domainkey`, `brevo2._domainkey`), and a DMARC TXT.
+   - **Branding:** three CNAMEs (`mail`, `r.mail`, `img.mail`). Brevo may not
+     verify the domain without them, but the `mail` one breaks inbound mail if
+     your mail server is `mail.<domain>`.
+4. Publish the authentication records. See [`dns-records.md`](dns-records.md)
+   before touching DMARC or SPF: keep an existing DMARC record rather than
+   adding Brevo's, and merge the SPF include into your existing record. Add
+   the branding records only if `mail.<domain>` doesn't already exist.
+5. Once they resolve publicly, click **Authenticate this domain**. If you had
+   to skip the branding records, the domain stays unverified. Add and verify
+   each From address individually under **Senders** instead (step 4 below).
 
 ## 3. Generate the SMTP key
 
@@ -42,9 +44,9 @@ Repeat for the second domain.
 3. Treat the SMTP key like a password. It goes in `/etc/postfix/sasl_passwd`
    on the mail VM (mode 600), never into git.
 
-## 4. Make sure both domains are listed as authorized senders
+## 4. Make sure your domains are listed as authorized senders
 
-In **Senders & IP -> Senders**, confirm that the From addresses your
+In **Senders, Domains and dedicated IPs -> Senders**, confirm that the From addresses your
 iRedMail users actually send from are either:
 
 - Listed individually as authorized senders, **or**

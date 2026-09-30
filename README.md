@@ -44,6 +44,7 @@ docs/
 postfix/
   main.cf.snippet        The lines added to /etc/postfix/main.cf
   transport_brevo        Recipient-domain -> relay map (consumer M$ domains)
+  tls_policy             Require TLS for the Brevo next-hop only
   sasl_passwd.example    Template for SASL credentials (real one is .gitignored)
 scripts/
   install.sh             Idempotent installer; copies files, postmap, reload
@@ -56,15 +57,18 @@ scripts/
 
 - Mail VM is Debian with iRedMail (Postfix as MTA).
 - You have root or sudo on the mail VM.
-- DNS for both sending domains is under your control.
-- A Brevo account with both sending domains verified (DKIM + SPF added).
+- DNS for every sending domain is under your control.
+- A Brevo account with every sending domain authenticated (DKIM + DMARC).
 - A Brevo SMTP key (login + key from Brevo's "SMTP & API" page).
+- Packages: `apt install -y dnsutils jq libsasl2-modules` (the last one is
+  required for Postfix to authenticate to the relay).
 
 ## Install (on the mail VM)
 
 ```sh
 # clone this repo onto the mail VM
-git clone <repo-url> /opt/claude-3-alternate-smtp-forwarder
+git clone https://github.com/tbuitendyk/claude-3-alternate-smtp-forwarder.git \
+    /opt/claude-3-alternate-smtp-forwarder
 cd /opt/claude-3-alternate-smtp-forwarder
 
 # create the real SASL password file from the template
@@ -78,6 +82,11 @@ sudo bash scripts/install.sh
 
 The installer is idempotent: rerunning is safe, and it leaves a backup of
 `main.cf` at `/etc/postfix/main.cf.bak.<timestamp>` the first time it edits.
+
+It keeps any `transport_maps` already configured (iRedMail's SQL/LDAP maps,
+which route mail for hosted domains and mailing lists) and appends ours to
+that same line in place. If an iRedMail upgrade rewrites the line, ours is
+dropped, so **re-run `install.sh` after an iRedMail upgrade**.
 
 ## Verify
 
@@ -109,10 +118,10 @@ deferring with a Microsoft-hosted MX gets promoted automatically.
 
 ## Reverting
 
-`scripts/install.sh --uninstall` removes the transport, sasl, and TLS lines
-that the installer added, restores the most recent `main.cf` backup if present,
-and reloads Postfix. The transport map and sasl password files are left in
-place so you don't lose your domain list / credentials.
+`scripts/install.sh --uninstall` removes the managed block from `main.cf`,
+takes our map back out of `transport_maps`, removes the cron job, then reloads
+Postfix. The transport map and sasl password files are left in place so you
+don't lose your domain list / credentials.
 
 ## Volume
 
@@ -120,6 +129,8 @@ Brevo's free tier is 300 messages/day. Only Microsoft-bound mail uses the
 quota. If you outgrow it, options:
 
 - Upgrade Brevo, or
-- Switch the smarthost to SES / Mailjet / SMTP2GO by editing one variable
-  (`RELAY_HOST` / `RELAY_PORT`) in `scripts/install.sh` and updating
-  `sasl_passwd`. The transport map is provider-agnostic.
+- Switch the smarthost to SES / Mailjet / SMTP2GO by changing the next-hop
+  (`[smtp-relay.brevo.com]:587`) in `postfix/transport_brevo`,
+  `postfix/tls_policy`, the `RELAY` variable in `scripts/add-o365-domain.sh`
+  and `scripts/auto-promote.sh`, and `/etc/postfix/sasl_passwd`, then re-run
+  `install.sh`.

@@ -36,6 +36,14 @@ require_postfix() {
     command -v postmap  >/dev/null || die "postmap not found - is Postfix installed?"
 }
 
+require_sasl_modules() {
+    # Without the Cyrus PLAIN/LOGIN plugins, Postfix fails with
+    # "no mechanism available" when authenticating to the relay.
+    if command -v dpkg >/dev/null && ! dpkg -s libsasl2-modules >/dev/null 2>&1; then
+        die "libsasl2-modules is not installed: apt install -y libsasl2-modules"
+    fi
+}
+
 backup_main_cf_once() {
     local first_backup_glob="${MAIN_CF}.bak.*"
     # only create a backup if there isn't already one from us
@@ -55,10 +63,64 @@ remove_block() {
 }
 
 append_block() {
-    # ensure file ends with newline before appending
     [ -z "$(tail -c1 "${MAIN_CF}")" ] || echo "" >> "${MAIN_CF}"
     cat "${SNIPPET}" >> "${MAIN_CF}"
     log "appended managed block to main.cf"
+}
+
+add_our_transport_map() {
+    # Edit the existing line in place rather than redefining transport_maps:
+    # a second definition works but makes every Postfix process log
+    # "overriding earlier entry". Must run after remove_block, which strips
+    # the duplicate definition older versions of this script wrote. Ours goes
+    # last so hosted-domain routing (iRedMail's SQL maps) always wins.
+    local current
+    current="$(postconf -h transport_maps)"
+    case " ${current//,/ } " in
+        *" hash:${TRANSPORT_DST} "*)
+            log "transport_maps already includes hash:${TRANSPORT_DST}" ;;
+        *)
+            postconf -e "transport_maps = ${current:+${current} }hash:${TRANSPORT_DST}"
+            log "transport_maps = $(postconf -h transport_maps)" ;;
+    esac
+}
+
+remove_our_transport_map() {
+    local current remaining
+    current="$(postconf -h transport_maps)"
+    case " ${current//,/ } " in
+        *" hash:${TRANSPORT_DST} "*) ;;
+        *) return 0 ;;
+    esac
+    remaining="$(printf '%s\n' "${current}" | tr ', ' '\n\n' | grep -v '^$' \
+                 | grep -vxF "hash:${TRANSPORT_DST}" | paste -sd' ' -)" || true
+    if [ -n "${remaining}" ]; then
+        postconf -e "transport_maps = ${remaining}"
+    else
+        postconf -X transport_maps
+    fi
+    log "removed hash:${TRANSPORT_DST} from transport_maps"
+}
+
+install_transport_map() {
+    if [ ! -f "${TRANSPORT_DST}" ]; then
+        install -m 0644 "${TRANSPORT_SRC}" "${TRANSPORT_DST}"
+        log "installed ${TRANSPORT_DST}"
+    else
+        # Keep the server's copy (it holds auto-promoted domains); only add
+        # repo entries whose domain it doesn't already list.
+        local missing
+        missing="$(awk 'NR==FNR { if (NF && $1 !~ /^#/) have[tolower($1)]=1; next }
+                        NF && $1 !~ /^#/ && !(tolower($1) in have)' \
+                        "${TRANSPORT_DST}" "${TRANSPORT_SRC}")"
+        if [ -n "${missing}" ]; then
+            printf '%s\n' "${missing}" >> "${TRANSPORT_DST}"
+            log "added $(printf '%s\n' "${missing}" | wc -l) new repo entries to ${TRANSPORT_DST}"
+        else
+            log "${TRANSPORT_DST} already has every repo entry; left as is"
+        fi
+    fi
+    postmap "${TRANSPORT_DST}"
 }
 
 install_map() {
@@ -115,14 +177,16 @@ reload_postfix() {
 install_action() {
     require_root
     require_postfix
+    require_sasl_modules
     ensure_sasl_passwd
 
     backup_main_cf_once
     remove_block
+    add_our_transport_map
     append_block
 
-    install_map "${TRANSPORT_SRC}" "${TRANSPORT_DST}"
-    install_map "${TLS_SRC}"       "${TLS_DST}"
+    install_transport_map
+    install_map "${TLS_SRC}" "${TLS_DST}"
 
     install_cron
     reload_postfix
@@ -137,6 +201,7 @@ uninstall_action() {
 
     backup_main_cf_once
     remove_block
+    remove_our_transport_map
     remove_cron
     reload_postfix
 

@@ -1,99 +1,102 @@
 # DNS records
 
-For each of the two sending domains, you need:
+When you add a domain in Brevo (**Senders, Domains and dedicated IPs ->
+Domains -> Add a domain**) it lists two groups of records: *Authentication*
+and *Branding*. Brevo may not mark the domain as verified until both groups
+resolve; see the branding section before adding that group.
 
-1. **An SPF record** that authorises *both* IONOS (your direct-delivery IP) and
-   Brevo (the relay).
-2. **A DKIM record** for Brevo (you keep your existing iRedMail DKIM record
-   too — both signatures coexist on the same message).
-3. **A DMARC record** (you almost certainly already have this from iRedMail;
-   nothing to change).
-4. **A Brevo verification TXT** (only until verification completes; Brevo's UI
-   shows it).
+Replace `example.com` with each real sending domain. Brevo derives the DKIM
+target from the domain with dots turned into dashes
+(`example.com` -> `example-com`), but always copy the values Brevo shows you.
 
-Replace `example.com` with each of your real domains.
+## Add: authentication records
 
-## 1. SPF
+| Type | Host | Value |
+| --- | --- | --- |
+| TXT | `@` | `brevo-code:<value from Brevo>` |
+| CNAME | `brevo1._domainkey` | `b1.example-com.dkim.brevo.com` |
+| CNAME | `brevo2._domainkey` | `b2.example-com.dkim.brevo.com` |
 
-The most common mistake here is *replacing* your existing SPF record with
-Brevo's, which then drops your IONOS IP and breaks direct delivery to
-non-Microsoft recipients. SPF allows only one TXT record starting with
-`v=spf1` per domain — you must merge.
-
-**Before** (typical iRedMail / IONOS setup):
+BIND zone-file form (note the trailing dots on CNAME targets):
 
 ```
-example.com.  TXT  "v=spf1 mx ~all"
+@                   IN TXT    "brevo-code:<value from Brevo>"
+brevo1._domainkey   IN CNAME  b1.example-com.dkim.brevo.com.
+brevo2._domainkey   IN CNAME  b2.example-com.dkim.brevo.com.
 ```
 
-**After** (merged):
+- The `brevo-code` TXT coexists with any other TXT records at the apex,
+  including SPF. Only `v=spf1` records are limited to one per name.
+- The DKIM CNAMEs let Brevo sign relayed mail as your domain. They coexist
+  with iRedMail's own DKIM record (a different selector, usually `dkim`), so a
+  relayed message can carry both signatures.
+
+## DMARC: keep yours if you have one
+
+A domain may have only **one** `_dmarc` TXT record. Check first:
 
 ```
-example.com.  TXT  "v=spf1 mx include:spf.brevo.com ~all"
+nslookup -type=TXT _dmarc.example.com
 ```
 
-Notes:
+- **None exists:** add the one Brevo suggests:
+  `_dmarc  IN TXT  "v=DMARC1; p=none; rua=mailto:rua@dmarc.brevo.com"`
+- **One exists:** keep it. Brevo only checks that *a* DMARC record exists.
 
-- `mx` already authorises whatever IPs your domain's MX records resolve to,
-  which on iRedMail means the mail VM's IONOS IP — keep it.
-- `include:spf.brevo.com` adds Brevo's outbound IP ranges. (Brevo also
-  publishes `spf.brevosend.com`; either works, but `spf.brevo.com` is what the
-  current UI hands out.)
-- Leave the qualifier as `~all` (softfail) unless you know you want `-all`.
-- Do **not** add a second `v=spf1` record. Multiple SPF records = permerror.
+If your policy is strict (`p=reject` or `p=quarantine`, especially with
+`aspf=s`), treat Brevo's DKIM signature as the only thing that makes relayed
+mail pass DMARC. Brevo normally uses its own bounce (Return-Path) domain, so
+SPF usually won't align with your From: domain. The two DKIM CNAMEs are then
+mandatory, not optional; without them Microsoft will reject the relayed mail.
 
-## 2. DKIM (Brevo)
+## SPF: merge, don't add
 
-Brevo's UI gives you the exact record. It is one of:
-
-- A TXT record named `mail._domainkey.example.com` with a long `k=rsa; p=...`
-  value, **or**
-- A CNAME record `mail._domainkey.example.com` -> `mail.domainkey.<id>.brevo-code.com`
-
-Add it verbatim. Your existing iRedMail DKIM record (usually
-`dkim._domainkey.example.com`) stays exactly as it is — they use different
-selectors (`mail` vs `dkim`) and don't conflict. A relayed message ends up
-with two DKIM signatures, which is fine.
-
-## 3. DMARC
-
-If iRedMail already set up DMARC for you, you don't need to change it. A
-typical record is:
+Brevo doesn't require an SPF change, but adding its include is harmless and
+covers any receiver that checks SPF against your domain. Edit your **existing**
+SPF record and keep its qualifier:
 
 ```
-_dmarc.example.com.  TXT  "v=DMARC1; p=none; rua=mailto:postmaster@example.com"
+before:  v=spf1 mx ip4:203.0.113.10 -all
+after:   v=spf1 mx ip4:203.0.113.10 include:spf.brevo.com -all
 ```
 
-DMARC passes if **either** SPF **or** DKIM aligns with the From: domain. With
-the SPF and DKIM above, both will align for direct mail (via your IP + the
-iRedMail `dkim` selector) and DKIM will align for Brevo-relayed mail (via
-Brevo's `mail` selector signing as your domain).
+Never add a second `v=spf1` record; two SPF records is a permanent error and
+breaks SPF for all your mail. If the domain has no SPF record yet,
+`v=spf1 mx include:spf.brevo.com ~all` is a reasonable start (`mx`
+authorizes whatever IP your MX host resolves to).
 
-If you're tightening DMARC to `p=quarantine` or `p=reject`, do the SPF/DKIM
-work first, watch DMARC aggregate reports for a couple of weeks, then move.
+## Branding records: only if `mail.<domain>` is free
 
-## 4. Brevo verification TXT (temporary)
+Brevo also lists three CNAMEs (`mail`, `r.mail`, `img.mail`) for branded
+tracking links. They don't affect relaying itself, but without them Brevo may
+leave the domain unverified. In that case it rejects mail from any From address
+you haven't added and verified individually under **Senders** ("the sender you
+used ... is not valid").
 
-While verifying a domain, Brevo asks you to add a TXT record like:
+First check whether the `mail` name is already in use:
 
 ```
-example.com.  TXT  "brevo-code:abcdef0123456789"
+nslookup mail.example.com 8.8.8.8
 ```
 
-You can leave it in place after verification (no harm) or delete it — Brevo
-re-checks DKIM/SPF, not this token, after initial setup.
+- **It doesn't exist:** add all three CNAMEs. The whole domain becomes
+  verified and any address on it can send.
+- **It exists (e.g. it's your mail server):** don't add them. A CNAME can't
+  coexist with the A record there, and replacing it breaks inbound mail for
+  every domain whose MX points at that host. Instead, add and verify each From
+  address your users send as under **Senders**.
 
-## Verifying from the mail VM
+## Verify
 
-Once propagated:
+After publishing (and bumping the zone serial on self-hosted DNS):
 
-```sh
-dig +short TXT example.com
-dig +short TXT mail._domainkey.example.com
-dig +short CNAME mail._domainkey.example.com
-dig +short TXT _dmarc.example.com
+```
+nslookup -type=TXT   example.com 8.8.8.8
+nslookup -type=CNAME brevo1._domainkey.example.com 8.8.8.8
+nslookup -type=CNAME brevo2._domainkey.example.com 8.8.8.8
+nslookup -type=TXT   _dmarc.example.com 8.8.8.8
 ```
 
-You can also use https://mxtoolbox.com/spf.aspx and the SPF/DKIM/DMARC
-analyser at https://www.mail-tester.com/ to send a test message through the
-relay and see all alignments at once.
+Once those resolve, click **Authenticate this domain** in Brevo. To check the
+full result end to end, send a relayed message to https://www.mail-tester.com/
+and confirm DKIM (`d=example.com`, selector `brevo1`) and DMARC both pass.

@@ -51,6 +51,7 @@ scripts/
   add-o365-domain.sh     MX-check a domain; if it's on O365, add to the map
   auto-promote.sh        Cron job: scan deferred queue, auto-add O365 domains
   healthcheck.sh         Send a test message via the Brevo relay
+  mailwatch              Live one-line-per-email view of mail in and out
 ```
 
 ## Prerequisites
@@ -98,6 +99,17 @@ bash scripts/healthcheck.sh you@outlook.com
 tail -f /var/log/mail.log | grep brevo
 # expect: ... relay=smtp-relay.brevo.com[...]:587, ... status=sent
 ```
+
+## Watching mail activity
+
+```sh
+sudo /opt/claude-3-alternate-smtp-forwarder/scripts/mailwatch         # last 20 emails, then live
+sudo /opt/claude-3-alternate-smtp-forwarder/scripts/mailwatch -n 50   # start with 50
+```
+
+One line per message (timestamp, IN/OUT/LOCAL, sender, receiver, subject),
+built from the amavis lines in `/var/log/mail.log`. Mail rejected before it
+reaches the spam scanner (e.g. at RCPT time) doesn't appear. Ctrl+C to stop.
 
 ## Adding an Office 365 custom domain
 

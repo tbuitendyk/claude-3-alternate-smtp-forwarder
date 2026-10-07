@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+# Live view of mail activity: one line per message scanned by amavis.
+import argparse
+import re
+import shutil
+import signal
+import subprocess
+import sys
+from collections import deque
+
+AMAVIS = re.compile(
+    r'^(?P<ts>\S+) \S+ amavis\[\d+\]: \([^)]*\) (?P<action>Passed|Blocked) (?P<cat>\S+) '
+    r'\{(?P<flags>[^}]*)\}.*? <(?P<sender>[^>]*)> -> (?P<rcpts><[^>]*>(?:,<[^>]*>)*)'
+)
+SUBJECT = re.compile(r', Subject: "((?:[^"\\]|\\.)*)"')
+RAW_SUFFIX = re.compile(r'\s*\(raw: .*$')
+SUBJECT_MAX = 114
+
+
+def parse(line):
+    m = AMAVIS.match(line)
+    if not m:
+        return None
+    ts = m["ts"]
+    if len(ts) >= 19 and ts[10] == "T":
+        ts = ts[:10] + " " + ts[11:19]
+    flags = m["flags"]
+    direction = ("IN" if "Inbound" in flags else
+                 "OUT" if "Outbound" in flags else
+                 "LOCAL" if "Internal" in flags else "?")
+    s = SUBJECT.search(line)
+    subject = s.group(1).replace('\\"', '"') if s else ""
+    subject = RAW_SUFFIX.sub("", subject)
+    if m["action"] == "Blocked":
+        subject = f"[BLOCKED {m['cat']}] {subject}"
+    elif m["cat"] != "CLEAN":
+        subject = f"[{m['cat']}] {subject}"
+    if len(subject) > SUBJECT_MAX:
+        subject = subject[: SUBJECT_MAX - 1] + "…"
+    sender = m["sender"] or "(bounce)"
+    rcpts = ",".join(r.strip("<>") for r in m["rcpts"].split(","))
+    return ts, direction, sender, rcpts, subject
+
+
+def fit(text, width):
+    if len(text) > width:
+        text = text[: max(width - 1, 0)] + "…"
+    return text.ljust(width)
+
+
+def show(row):
+    cols = shutil.get_terminal_size((120, 24)).columns
+    ts, direction, sender, rcpts, subject = row
+    rest = max(cols - 19 - 5 - 4, 30)
+    w_addr = max(min(int(rest * 0.3), 32), 12)
+    w_subj = max(rest - 2 * w_addr, 10)
+    print(" ".join([fit(ts, 19), fit(direction, 5), fit(sender, w_addr),
+                    fit(rcpts, w_addr), fit(subject, w_subj).rstrip()]), flush=True)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Live one-line-per-email view of mail activity.")
+    ap.add_argument("-n", "--history", type=int, default=20,
+                    help="how many recent emails to show before following (default 20)")
+    ap.add_argument("--log", default="/var/log/mail.log")
+    args = ap.parse_args()
+
+    show(("TIMESTAMP", "DIR", "SENDER", "RECEIVER", "SUBJECT"))
+    recent = deque(maxlen=max(args.history, 0))
+    with open(args.log, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            row = parse(line)
+            if row:
+                recent.append(row)
+    for row in recent:
+        show(row)
+
+    # Turn kill/hangup into a normal exit so the finally block stops tail.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, lambda *_: sys.exit(0))
+    tail = subprocess.Popen(["tail", "-n", "0", "-F", args.log], stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, text=True, errors="replace")
+    try:
+        for line in tail.stdout:
+            row = parse(line)
+            if row:
+                show(row)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        tail.terminate()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)

@@ -13,4 +13,8 @@ smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_policy_maps = hash:/etc/postfix/tls_policy
 
+# Defer (rather than bounce) Microsoft's IP-block rejections, so
+# auto-promote.sh can route the domain through Brevo and retry the message.
+smtp_reply_filter = pcre:/etc/postfix/microsoft_block_reply_filter
+
 # --- END claude-3-alternate-smtp-forwarder ---

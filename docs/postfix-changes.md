@@ -23,6 +23,9 @@ smtp_sasl_mechanism_filter = plain, login
 
 smtp_tls_policy_maps = hash:/etc/postfix/tls_policy
 
+# ...
+smtp_reply_filter = pcre:/etc/postfix/microsoft_block_reply_filter
+
 # --- END claude-3-alternate-smtp-forwarder ---
 ```
 
@@ -49,6 +52,13 @@ Notes for anyone reading this later:
   deliveries still work with hosts that don't offer TLS.
 - Postfix needs the Cyrus SASL plugins to authenticate as a client:
   `apt install -y libsasl2-modules`. The installer refuses to run without it.
+- `smtp_reply_filter` rewrites only Microsoft's IP-block rejections
+  (`550 5.7.1 ... (S3140|S3150)` and `550 5.7.606`-`649`) into `450 4.7.x`, so
+  the message is deferred instead of bounced and `auto-promote.sh` can route
+  its domain through Brevo. Every other reply passes through unchanged. It
+  needs Postfix's pcre map type (`postfix-pcre`); the installer checks for it,
+  and refuses to run if `smtp_reply_filter` is already set elsewhere in
+  `main.cf` rather than overwrite it.
 
 ## Files written by the installer
 
@@ -60,6 +70,7 @@ Notes for anyone reading this later:
 | `/etc/postfix/sasl_passwd.db` | 600 | no | `postmap` output |
 | `/etc/postfix/tls_policy` | 644 | yes | TLS policy for Brevo next-hop |
 | `/etc/postfix/tls_policy.db` | 644 | no | `postmap` output |
+| `/etc/postfix/microsoft_block_reply_filter` | 644 | yes | pcre reply filter (no `postmap`) |
 | `/etc/cron.d/smtp-forwarder-autopromote` | 644 | no (generated) | 15-min auto-promote cron |
 
 `/etc/postfix/transport_brevo` is only copied from the repo on the first

@@ -17,6 +17,8 @@ TRANSPORT_SRC="${REPO_DIR}/postfix/transport_brevo"
 TRANSPORT_DST="${POSTFIX_DIR}/transport_brevo"
 TLS_SRC="${REPO_DIR}/postfix/tls_policy"
 TLS_DST="${POSTFIX_DIR}/tls_policy"
+REPLY_FILTER_SRC="${REPO_DIR}/postfix/microsoft_block_reply_filter"
+REPLY_FILTER_DST="${POSTFIX_DIR}/microsoft_block_reply_filter"
 SASL_DST="${POSTFIX_DIR}/sasl_passwd"
 SASL_EXAMPLE="${REPO_DIR}/postfix/sasl_passwd.example"
 CRON_DST="/etc/cron.d/smtp-forwarder-autopromote"
@@ -41,6 +43,18 @@ require_sasl_modules() {
     # "no mechanism available" when authenticating to the relay.
     if command -v dpkg >/dev/null && ! dpkg -s libsasl2-modules >/dev/null 2>&1; then
         die "libsasl2-modules is not installed: apt install -y libsasl2-modules"
+    fi
+}
+
+require_pcre() {
+    postconf -m | grep -qx pcre || die "Postfix pcre support missing: apt install -y postfix-pcre"
+}
+
+require_reply_filter_free() {
+    # Look only outside our managed block, before anything is changed.
+    if sed "/^${BEGIN_MARKER}\$/,/^${END_MARKER}\$/d" "${MAIN_CF}" \
+            | grep -qE '^smtp_reply_filter[[:space:]]*='; then
+        die "smtp_reply_filter is already set in main.cf; merge it with ${REPLY_FILTER_SRC} by hand"
     fi
 }
 
@@ -178,11 +192,14 @@ install_action() {
     require_root
     require_postfix
     require_sasl_modules
+    require_pcre
+    require_reply_filter_free
     ensure_sasl_passwd
 
     backup_main_cf_once
     remove_block
     add_our_transport_map
+    install -m 0644 "${REPLY_FILTER_SRC}" "${REPLY_FILTER_DST}"
     append_block
 
     install_transport_map
@@ -209,6 +226,7 @@ uninstall_action() {
     log "left in place (delete manually if desired):"
     log "  ${TRANSPORT_DST}{,.db}"
     log "  ${TLS_DST}{,.db}"
+    log "  ${REPLY_FILTER_DST}"
     log "  ${SASL_DST}{,.db}"
 }
 

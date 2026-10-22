@@ -45,11 +45,12 @@ postfix/
   main.cf.snippet        The lines added to /etc/postfix/main.cf
   transport_brevo        Recipient-domain -> relay map (consumer M$ domains)
   tls_policy             Require TLS for the Brevo next-hop only
+  microsoft_block_reply_filter  Defer (not bounce) Microsoft IP-block replies
   sasl_passwd.example    Template for SASL credentials (real one is .gitignored)
 scripts/
   install.sh             Idempotent installer; copies files, postmap, reload
   add-o365-domain.sh     MX-check a domain; if it's on O365, add to the map
-  auto-promote.sh        Cron job: scan deferred queue, auto-add O365 domains
+  auto-promote.sh        Cron job: auto-add O365 domains from queue + mail.log
   healthcheck.sh         Send a test message via the Brevo relay
   mailwatch              Live one-line-per-email view of mail in and out
 ```
@@ -61,8 +62,9 @@ scripts/
 - DNS for every sending domain is under your control.
 - A Brevo account with every sending domain authenticated (DKIM + DMARC).
 - A Brevo SMTP key (login + key from Brevo's "SMTP & API" page).
-- Packages: `apt install -y dnsutils jq libsasl2-modules` (the last one is
-  required for Postfix to authenticate to the relay).
+- Packages: `apt install -y dnsutils jq libsasl2-modules postfix-pcre`
+  (`libsasl2-modules` lets Postfix authenticate to the relay; `postfix-pcre`
+  is needed for the Microsoft reply filter; iRedMail usually has it already).
 
 ## Install (on the mail VM)
 
@@ -124,9 +126,17 @@ sudo bash scripts/add-o365-domain.sh customer-domain.example
 If the MX matches O365, the domain is appended to `/etc/postfix/transport_brevo`
 and Postfix is reloaded. If it doesn't, nothing is changed.
 
-A cron job (`scripts/auto-promote.sh`, installed by `install.sh`) does the same
-thing every 15 minutes against the *deferred* queue — any domain that's
-deferring with a Microsoft-hosted MX gets promoted automatically.
+You normally don't need to. Microsoft rejects mail from the blocked IP with a
+permanent error (`550 5.7.1 ... (S3140)` or `550 5.7.606-649`), which would
+bounce the message. `postfix/microsoft_block_reply_filter` rewrites just those
+replies into temporary ones, so the message waits in the deferred queue. A
+cron job (`scripts/auto-promote.sh`, every 15 minutes) then MX-checks the
+domains in the deferred queue and any bounced/deferred deliveries to
+`*.mail.protection.outlook.com` in `mail.log`, adds Microsoft-hosted ones to
+the transport map, and flushes the queue. The first message to a new
+Microsoft 365 domain is delayed by up to 15 minutes instead of bouncing.
+
+Its log is `/var/log/smtp-forwarder-autopromote.log`.
 
 ## Reverting
 

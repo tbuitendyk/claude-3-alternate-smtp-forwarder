@@ -1,0 +1,13 @@
+# Postfix smtp_reply_filter (pcre): turn Microsoft 365's IP-block rejections
+# into temporary failures, so the message stays in the deferred queue instead
+# of bouncing. scripts/auto-promote.sh then adds the recipient domain to
+# transport_brevo and flushes the queue, so the message goes out via Brevo.
+#
+# Only these block replies are rewritten; every other reply passes unchanged.
+#   S3140 / S3150   "...on our block list"            550 5.7.1 ... (S3140)
+#   5.7.606-649     "Access denied, banned sending IP" 550 5.7.606 ...
+#
+# Applied one reply line at a time. No postmap needed (pcre table).
+
+/^5\d\d([ -])5\.7\.1(\d*)( .*\(S3(140|150)\).*)$/    450${1}4.7.1${2}${3}
+/^5\d\d([ -])5\.7\.(6(0[6-9]|[1-4]\d))( .*)$/        450${1}4.7.${2}${4}
